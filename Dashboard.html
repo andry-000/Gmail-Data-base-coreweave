@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <?!= include('Stylesheet'); ?>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo"></div>
+        <div>
+          <div class="title">AP Invoices Dashboard</div>
+          <div class="subtitle" id="status-line">Loading…</div>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="btn-start" class="btn primary">▶ Start ingestion</button>
+        <button id="btn-reset" class="btn ghost" title="Resets the Gmail cursor. Does NOT delete data.">↺ Reset cursor</button>
+        <button id="btn-refresh" class="btn ghost">↻ Refresh</button>
+      </div>
+    </header>
+
+    <section class="kpis">
+      <div class="kpi">
+        <div class="kpi-label">Total documents received</div>
+        <div class="kpi-value" id="kpi-docs">—</div>
+        <div class="kpi-foot" id="kpi-docs-foot">across all matching emails</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Total emails (ap-invoices)</div>
+        <div class="kpi-value" id="kpi-emails">—</div>
+        <div class="kpi-foot" id="kpi-emails-foot">since configured start date</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Ingestion state</div>
+        <div class="kpi-value small" id="kpi-state">idle</div>
+        <div class="kpi-foot" id="kpi-state-foot">—</div>
+      </div>
+    </section>
+
+    <section class="filters">
+      <div class="row">
+        <label class="field">
+          <span>From</span>
+          <input type="date" id="date-from" />
+        </label>
+        <label class="field">
+          <span>To</span>
+          <input type="date" id="date-to" />
+        </label>
+        <div class="search-wrap">
+          <input
+            id="search-input"
+            type="text"
+            placeholder="Type a filter and press Enter. Examples: Subject: invoice, From: acme, PDF: 2026-03, Has: zip, Body: net30, Month: 2026-02"
+            autocomplete="off"
+          />
+          <span class="hint">↵ Enter to add · ⌫ Backspace on empty input removes last chip</span>
+        </div>
+      </div>
+      <div id="chips" class="chips"></div>
+      <div class="row meta">
+        <span id="result-meta" class="muted">No data loaded yet.</span>
+        <span class="spacer"></span>
+        <button id="btn-export-csv" class="btn">⬇ Download CSV (filtered)</button>
+        <button id="btn-export-xlsx" class="btn">⬇ Download XLSX (filtered)</button>
+      </div>
+    </section>
+
+    <section class="chart-wrap">
+      <div class="chart-head">
+        <div class="chart-title">Documents & emails per month</div>
+        <div class="chart-legend">
+          <span class="dot dot-emails"></span> Emails
+          <span class="dot dot-docs"></span> Documents
+        </div>
+      </div>
+      <svg id="bar-chart" viewBox="0 0 900 320" preserveAspectRatio="xMidYMid meet"></svg>
+    </section>
+
+    <section class="tables">
+      <div class="table-head">
+        <h3>Emails <span class="muted" id="email-count-label"></span></h3>
+      </div>
+      <div class="table-scroll">
+        <table id="emails-table">
+          <thead><tr id="emails-thead"></tr></thead>
+          <tbody id="emails-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="table-head">
+        <h3>Documents <span class="muted" id="doc-count-label"></span></h3>
+      </div>
+      <div class="table-scroll">
+        <table id="docs-table">
+          <thead><tr id="docs-thead"></tr></thead>
+          <tbody id="docs-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="footer muted">
+      <span>Spreadsheet: <a id="ss-link" target="_blank" href="#">—</a></span>
+      <span class="spacer"></span>
+      <span id="query-line"></span>
+    </footer>
+  </div>
+
+  <?!= include('JavaScript'); ?>
+</body>
+</html>

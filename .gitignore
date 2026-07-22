@@ -1,0 +1,12 @@
+# Local Apps Script dev
+node_modules/
+.clasp.json
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/

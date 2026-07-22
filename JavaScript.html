@@ -1,0 +1,296 @@
+<script>
+  const state = {
+    chips: [],
+    dateFrom: '',
+    dateTo: '',
+    lastResult: null,
+    lastRun: null,
+    refreshTimer: null
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, attrs = {}, ...children) => {
+    const n = document.createElement(tag);
+    for (const k in attrs) {
+      if (k === 'class') n.className = attrs[k];
+      else if (k === 'onclick') n.onclick = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    }
+    for (const c of children) n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    return n;
+  };
+  const toast = (msg, kind = '') => {
+    const t = el('div', { class: 'toast ' + kind }, msg);
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3500);
+  };
+
+  // Search bar
+  $('search-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const v = e.target.value.trim();
+      if (!v) return;
+      state.chips.push(v);
+      e.target.value = '';
+      renderChips();
+      runSearch();
+    } else if (e.key === 'Backspace' && e.target.value === '' && state.chips.length) {
+      state.chips.pop();
+      renderChips();
+      runSearch();
+    }
+  });
+  $('date-from').addEventListener('change', (e) => { state.dateFrom = e.target.value; runSearch(); });
+  $('date-to').addEventListener('change', (e) => { state.dateTo = e.target.value; runSearch(); });
+
+  function renderChips() {
+    const c = $('chips');
+    c.innerHTML = '';
+    state.chips.forEach((chip, i) => {
+      const node = el('span', { class: 'chip' },
+        chip,
+        el('span', { class: 'x', onclick: () => { state.chips.splice(i, 1); renderChips(); runSearch(); } }, '✕')
+      );
+      c.appendChild(node);
+    });
+  }
+
+  // Status / KPIs
+  async function refreshStatus() {
+    try {
+      const s = await google.script.run.apiGetStatus();
+      $('status-line').textContent = (s.config && s.config.SPREADSHEET_NAME) || 'Dashboard';
+      $('kpi-docs').textContent = (s.counts && s.counts.documents || 0).toLocaleString();
+      $('kpi-emails').textContent = (s.counts && s.counts.emails || 0).toLocaleString();
+      const st = s.state || {};
+      let stText;
+      if (s.isRunning) stText = '▶ running';
+      else if (st.completedAt) stText = 'complete';
+      else if (st.pageToken) stText = 'paused (resumable)';
+      else if (st.runCount) stText = 'paused';
+      else stText = 'idle';
+      $('kpi-state').textContent = stText;
+      $('kpi-state-foot').textContent = st.lastRunAt ? ('last run ' + new Date(st.lastRunAt).toLocaleString()) : '—';
+      $('query-line').textContent = s.query ? ('Gmail query: ' + s.query) : '';
+      if (s.config && s.config.SPREADSHEET_NAME) {
+        $('ss-link').textContent = s.config.SPREADSHEET_NAME;
+        $('ss-link').href = 'https://drive.google.com/drive/search?q=' + encodeURIComponent(s.config.SPREADSHEET_NAME);
+      }
+      // Auto-poll more often while ingestion is running so the user sees progress
+      if (s.isRunning) {
+        if (state.refreshTimer) clearInterval(state.refreshTimer);
+        state.refreshTimer = setInterval(refreshStatus, 5000);
+      } else {
+        if (state.refreshTimer) { clearInterval(state.refreshTimer); state.refreshTimer = null; }
+      }
+    } catch (e) {
+      console.error('refreshStatus failed', e);
+    }
+  }
+
+  async function runSearch() {
+    try {
+      await google.script.run
+        .withSuccessHandler(onSearchResult)
+        .withFailureHandler((e) => { console.error(e); toast('Search failed: ' + e.message, 'error'); })
+        .apiSearch(state.chips, state.dateFrom, state.dateTo);
+    } catch (e) { console.error(e); }
+  }
+
+  function onSearchResult(res) {
+    state.lastResult = res;
+    $('kpi-docs').textContent = (res.totals.documents || 0).toLocaleString();
+    $('kpi-emails').textContent = (res.totals.emails || 0).toLocaleString();
+    const meta = res.totals.returned + ' of ' + res.totals.emails + ' emails · ' + res.totals.documents + ' documents';
+    $('result-meta').textContent = (res.totals.truncated ? 'showing first ' : '') + meta;
+    renderEmailsTable(res.headers, res.rows);
+    renderDocsTable(res.docHeaders || [], res.docRows || []);
+    renderBarChart(res.monthly || {});
+    $('email-count-label').textContent = '(' + (res.rows ? res.rows.length : 0) + ')';
+    $('doc-count-label').textContent = '(' + (res.docRows ? res.docRows.length : 0) + ')';
+  }
+
+  const EMAIL_COLS = [
+    { key: 'date', label: 'Date' },
+    { key: 'subject', label: 'Subject', truncate: true },
+    { key: 'from', label: 'From' },
+    { key: 'to', label: 'To' },
+    { key: 'cc', label: 'CC' },
+    { key: 'labels', label: 'Labels' },
+    { key: 'attachmentCount', label: 'Att.' },
+    { key: 'hasZip', label: 'Zip' },
+    { key: 'hasNestedEmail', label: 'Nested' }
+  ];
+  const DOC_COLS = [
+    { key: 'emailDate', label: 'Date' },
+    { key: 'filename', label: 'Filename', truncate: true },
+    { key: 'mimeType', label: 'MIME' },
+    { key: 'sizeBytes', label: 'Size' },
+    { key: 'source', label: 'Source' },
+    { key: 'emailSubject', label: 'Email subject', truncate: true },
+    { key: 'emailFrom', label: 'Email from' },
+    { key: 'driveFileUrl', label: 'Drive' }
+  ];
+
+  function renderEmailsTable(headers, rows) {
+    const thead = $('emails-thead');
+    const tbody = $('emails-tbody');
+    thead.innerHTML = '';
+    EMAIL_COLS.forEach(c => thead.appendChild(el('th', {}, c.label)));
+    tbody.innerHTML = '';
+    const idx = {};
+    headers.forEach((h, i) => idx[h] = i);
+    for (let i = 0; i < Math.min(rows.length, 500); i++) {
+      const r = rows[i];
+      const tr = el('tr');
+      EMAIL_COLS.forEach(c => {
+        const v = idx[c.key] != null ? r[idx[c.key]] : '';
+        tr.appendChild(el('td', { class: c.truncate ? 'truncate' : '', title: v == null ? '' : String(v) },
+          v === true ? '✓' : v === false ? '' : (v == null ? '' : String(v))));
+      });
+      tbody.appendChild(tr);
+    }
+  }
+
+  function renderDocsTable(headers, rows) {
+    const thead = $('docs-thead');
+    const tbody = $('docs-tbody');
+    thead.innerHTML = '';
+    DOC_COLS.forEach(c => thead.appendChild(el('th', {}, c.label)));
+    tbody.innerHTML = '';
+    if (!headers || !headers.length) return;
+    const idx = {};
+    headers.forEach((h, i) => idx[h] = i);
+    for (let i = 0; i < Math.min(rows.length, 500); i++) {
+      const r = rows[i];
+      const tr = el('tr');
+      DOC_COLS.forEach(c => {
+        const v = idx[c.key] != null ? r[idx[c.key]] : '';
+        const cell = el('td', { class: c.truncate ? 'truncate' : '', title: v == null ? '' : String(v) });
+        if (c.key === 'driveFileUrl' && v) {
+          const a = el('a', { href: String(v), target: '_blank' }, '↗ open');
+          a.style.color = 'var(--accent-2)';
+          cell.appendChild(a);
+        } else if (c.key === 'sizeBytes') {
+          cell.textContent = _humanSize_(Number(v) || 0);
+        } else {
+          cell.textContent = v === true ? '✓' : v === false ? '' : (v == null ? '' : String(v));
+        }
+        tr.appendChild(cell);
+      });
+      tbody.appendChild(tr);
+    }
+  }
+
+  function _humanSize_(b) {
+    if (!b) return '';
+    if (b < 1024) return b + ' B';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+    if (b < 1024 * 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + ' MB';
+    return (b / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  }
+
+  function renderBarChart(monthly) {
+    const svg = $('bar-chart');
+    svg.innerHTML = '';
+    const months = Object.keys(monthly).sort();
+    if (months.length === 0) {
+      svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="#8a91a6" font-size="14">No data yet. Click ▶ Start ingestion.</text>';
+      return;
+    }
+    const W = 900, H = 320, padL = 50, padR = 20, padT = 20, padB = 50;
+    const innerW = W - padL - padR;
+    const innerH = H - padT - padB;
+    const groupW = innerW / months.length;
+    const barW = Math.min(28, groupW * 0.35);
+    const maxY = Math.max(1, ...months.map(m => Math.max(monthly[m].emails || 0, monthly[m].documents || 0)));
+    const ticks = 4;
+    for (let t = 0; t <= ticks; t++) {
+      const y = padT + (innerH * t / ticks);
+      const v = Math.round(maxY * (1 - t / ticks));
+      svg.appendChild(_svgEl('line', { x1: padL, x2: W - padR, y1: y, y2: y, stroke: '#262a3a', 'stroke-dasharray': '2,3' }));
+      svg.appendChild(_svgEl('text', { x: padL - 8, y: y + 4, 'text-anchor': 'end', fill: '#8a91a6', 'font-size': 10 }, v));
+    }
+    months.forEach((m, i) => {
+      const cx = padL + groupW * i + groupW / 2;
+      const eH = (monthly[m].emails || 0) / maxY * innerH;
+      const dH = (monthly[m].documents || 0) / maxY * innerH;
+      svg.appendChild(_svgEl('rect', { x: cx - barW - 2, y: padT + innerH - eH, width: barW, height: eH, fill: '#3b82f6', rx: 2 }));
+      svg.appendChild(_svgEl('rect', { x: cx + 2, y: padT + innerH - dH, width: barW, height: dH, fill: '#9ca3af', rx: 2 }));
+      svg.appendChild(_svgEl('text', { x: cx, y: H - padB + 16, 'text-anchor': 'middle', fill: '#8a91a6', 'font-size': 10 }, m));
+      svg.appendChild(_svgEl('title', {}, m + ' — emails: ' + (monthly[m].emails || 0) + ', docs: ' + (monthly[m].documents || 0)));
+    });
+  }
+
+  function _svgEl(tag, attrs, text) {
+    const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (text !== undefined) n.appendChild(document.createTextNode(text));
+    return n;
+  }
+
+  // Buttons
+  $('btn-refresh').onclick = async () => {
+    await refreshStatus();
+    await runSearch();
+    toast('Refreshed', 'success');
+  };
+  $('btn-start').onclick = async () => {
+    $('btn-start').disabled = true;
+    const original = $('btn-start').textContent;
+    $('btn-start').textContent = '⏳ Scheduled…';
+    try {
+      const res = await google.script.run.apiStartIngestion();
+      toast('Ingestion: ' + (res.status || 'unknown'), res && res.ok ? 'success' : 'error');
+      await refreshStatus();
+    } catch (e) {
+      toast('Ingestion error: ' + e.message, 'error');
+    } finally {
+      $('btn-start').disabled = false;
+      $('btn-start').textContent = original;
+    }
+  };
+  $('btn-reset').onclick = async () => {
+    if (!confirm('Reset ingestion cursor? This will NOT delete any data already in the sheet, but the next run will restart from the configured start date.')) return;
+    try {
+      await google.script.run.apiResetIngestion();
+      toast('Cursor reset', 'success');
+      await refreshStatus();
+    } catch (e) { toast('Reset failed: ' + e.message, 'error'); }
+  };
+  $('btn-export-csv').onclick = async () => {
+    try {
+      const csv = await google.script.run.apiExportCsv(state.chips, state.dateFrom, state.dateTo);
+      _downloadBlob_(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'ap-invoices-' + _stamp_() + '.csv');
+    } catch (e) { toast('Export failed: ' + e.message, 'error'); }
+  };
+  $('btn-export-xlsx').onclick = async () => {
+    try {
+      const b64 = await google.script.run.apiExportXlsx(state.chips, state.dateFrom, state.dateTo);
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      _downloadBlob_(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'ap-invoices-' + _stamp_() + '.xlsx');
+    } catch (e) { toast('Export failed: ' + e.message, 'error'); }
+  };
+
+  function _stamp_() {
+    const d = new Date();
+    return d.getFullYear() + '' +
+      String(d.getMonth() + 1).padStart(2, '0') +
+      String(d.getDate()).padStart(2, '0') + '-' +
+      String(d.getHours()).padStart(2, '0') +
+      String(d.getMinutes()).padStart(2, '0');
+  }
+  function _downloadBlob_(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: name });
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 100);
+  }
+
+  // Boot
+  refreshStatus().then(runSearch);
+</script>
