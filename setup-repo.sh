@@ -3,7 +3,7 @@
 #   https://github.com/new  ->  name: ap-automation-portfolio, public, no README
 set -euo pipefail
 
-REPO="https://github.com/andry-000/ap-automation-portfolio.git"
+REPO="https://github.com/andry-000/Gmail-Data-base-coreweave.git"
 
 if [ ! -f "Code.gs" ] || [ ! -f "appsscript.json" ]; then
   echo "Run this from the project root (where Code.gs lives)."
